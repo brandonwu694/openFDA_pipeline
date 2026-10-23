@@ -6,6 +6,12 @@ The pipeline follows a four-stage data processing architecture: **Raw → Bronze
 
 Each stage has a distinct responsibility, separating source preservation, storage optimization, data cleaning, and application-specific transformations.
 
+Tasks form a DAG around these data layers. Ingestion publishes a completed Raw
+batch; the independent Bronze node converts that batch without downloading data.
+Bronze Parquet is a shared input for downstream Python or SQL/dbt tasks, each
+owning its outputs. dbt requires a SQL engine that can access the Parquet data.
+No orchestration framework is required by the conversion implementation.
+
 ### Raw Layer — Source Preservation
 
 **Purpose:** Preserve original openFDA API responses exactly as received to ensure reproducibility, traceability, and recoverability.
@@ -30,6 +36,33 @@ Each stage has a distinct responsibility, separating source preservation, storag
 - Record schema information and conversion metadata.
 
 **Output:** Parquet datasets representing the original source records.
+
+#### Device enforcement conversion contract
+
+- Implemented by `bronze/raw_to_bronze.py`, callable as
+  `convert_batch(raw_batch_dir, output_dir)` or through `bronze --raw-batch ...`.
+- Read files in ingestion-manifest order and verify SHA-256 checksums and file,
+  partition, and batch counts. Process one JSON file at a time and write one
+  Snappy-compressed Parquet file per source file.
+- Schema version 1 covers all 25 observed source fields: 24 nullable strings and
+  `openfda` encoded as nullable JSON text. Preserve dates, identifiers, blanks,
+  whitespace, duplicate records, and row order. Reject unknown fields and
+  incompatible non-null types pending an explicit schema update.
+- Encode empty `openfda` objects as `"{}"`. Missing known fields and explicit JSON
+  nulls become Parquet nulls; Raw remains authoritative for that distinction.
+  Decode populated annotations with JSON when needed downstream.
+- Add `_source_batch_id`, `_source_file`, and zero-based `_source_record_index`
+  columns. Store source checksums, file mappings, counts, schema/version,
+  converter/PyArrow versions, and UTC conversion timestamps separately in
+  `conversion_metadata.json`.
+- Mirror the Raw ingestion date and batch ID below
+  `data/bronze/device_enforcement/`. Stage conversion outside Raw, validate each
+  Parquet file by reading its schema and rows, then publish the complete batch
+  with a directory rename. On failure, discard staging files. Reject existing
+  output batches without overwriting them.
+- Apply no cleaning or business-rule filtering. Silver performs standardization,
+  deduplication, date parsing, and quality policies; Gold produces analytics and
+  application-specific transformations.
 
 ### Silver Layer — Data Cleaning and Standardization
 

@@ -52,6 +52,41 @@ listed in its metadata. Ignore hidden `.backfill-*` staging directories, which
 may remain after forced termination. Raw data is excluded from Git; cleaning and
 Parquet conversion follow in the [downstream layers](docs/PIPELINE.md).
 
+## Bronze conversion
+
+Install or reinstall the package to register the `bronze` command:
+
+```sh
+python -m pip install .
+bronze --raw-batch data/raw/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=YOUR_BATCH_ID
+```
+
+Replace the date and batch ID with a completed Raw batch. Use `--output-dir` to
+override the default `data/bronze/` root. Each source JSON file produces one
+Snappy-compressed Parquet file in manifest order:
+
+```text
+data/bronze/device_enforcement/
+  ingestion_date=YYYY-MM-DD/
+    batch_id=YOUR_BATCH_ID/
+      part-0001.parquet
+      conversion_metadata.json
+```
+
+Bronze verifies source checksums and counts, preserves strings and row order,
+and adds source batch/file/record-position columns. `openfda` objects are stored
+as JSON text, including `{}`; missing keys and explicit nulls become Parquet
+nulls. Unknown source fields or incompatible types require schema review.
+Cleaning and date parsing remain in Silver.
+
+Outputs are published only after Parquet readback validates schema and counts.
+Failed runs remove staging files; reruns reject an existing completed batch.
+Use a separate output root for intentional reprocessing. For programmatic DAG
+use, call `convert_batch(raw_batch_dir, output_dir)` from
+`openFDA_pipeline.bronze.raw_to_bronze`; it returns the completed batch path.
+Ignore hidden `.bronze-*` staging directories, which may remain after forced
+termination. Select one completed Bronze batch for downstream processing.
+
 ## Exploratory notebook
 
 With your Python environment activated, run from the repository root:

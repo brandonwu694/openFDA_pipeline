@@ -7,7 +7,7 @@ name = "openFDA-pipeline"
 version = "0.1.0"
 description = "Ingest and process openFDA medical device recall data"
 requires-python = ">=3.11"
-dependencies = ["requests>=2.31,<3"]
+dependencies = ["requests>=2.31,<3", "pyarrow>=18"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -15,6 +15,7 @@ notebook = ["jupyterlab>=4", "pandas>=2.2", "matplotlib>=3.8"]
 
 [project.scripts]
 backfill = "openFDA_pipeline.backfill:main"
+bronze = "openFDA_pipeline.bronze.raw_to_bronze:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
