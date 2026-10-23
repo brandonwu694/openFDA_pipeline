@@ -30,6 +30,7 @@ Refer to `pipeline.md` for the pipeline architecture, data flow, layer responsib
 - Prefer modifying existing components over introducing new ones when appropriate.
 
 ### Reliability and Testing
+- Use pytest for tests, with fixtures for shared setup and parametrization for related cases.
 - Handle errors explicitly and provide actionable error messages.
 - Avoid silently swallowing exceptions or failures.
 - Write focused tests for meaningful behavior and edge cases.
