@@ -19,10 +19,15 @@ Then run:
 backfill
 ```
 
-Downloads all `/device/enforcement` partitions (2004–present) from the
+Downloads all `/device/enforcement` partitions from the
 [openFDA manifest](https://api.fda.gov/download.json) into a current historical
-snapshot. The default output is `data/raw/`, relative to the current working
-directory. To use a different location:
+snapshot. FDA describes the endpoint as covering 2004–present, but the verified
+October 21, 2026 export contains 40,300 records with `report_date` values from
+June 20, 2012 through October 14, 2026. This is the observed report-date range for
+that snapshot, not a filter applied by the script or a guarantee for future exports.
+
+The default output is `data/raw/`, relative to the current working directory.
+To use a different location:
 
 ```sh
 backfill --output-dir /path/to/raw
