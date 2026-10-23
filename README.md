@@ -138,6 +138,42 @@ use, call `convert_batch(raw_batch_dir, output_dir)` from
 Ignore hidden `.bronze-*` staging directories, which may remain after forced
 termination. Select one completed Bronze batch for downstream processing.
 
+## Silver cleaning
+
+Install or reinstall the package, then clean the sole pending Bronze snapshot:
+
+```sh
+python -m pip install .
+silver
+```
+
+Use `silver --bronze-batch <completed-bronze-batch-directory>` for explicit
+selection and `--output-dir /path/to/silver` to change the output root. With no
+pending batches the command exits successfully; with several it lists candidates
+and requires a selection. Explicit reruns reject existing outputs.
+
+Outputs mirror the ingestion date and batch ID under
+`data/silver/device_enforcement/`: `accepted.parquet`, `quarantine.parquet`,
+`duplicates.parquet`, and `silver_metadata.json`. Even empty dispositions have
+typed Parquet files. Select one completed snapshot for downstream analysis;
+cross-snapshot reconciliation and a current view are not implemented yet.
+
+Four packaged SQL steps standardize fields, parse dates, assign quality codes,
+and deduplicate records through DuckDB. Missing required identifiers/report dates
+and unparseable supplied dates go to quarantine. Suspicious but parseable dates
+and unfamiliar categories remain accepted with warnings. Exact copies retain a
+deterministic representative; conflicting values for one recall number quarantine
+the entire group. Inspect `_error_codes` and `_warning_codes` when using outputs.
+There is no imputation or manufacturer entity matching.
+
+Original date strings and source provenance remain inspectable. Metadata records
+input/output checksums, counts, quality summaries, and schema, rule, SQL, and tool
+versions. Publication is atomic after readback validation. Hidden `.silver-*`
+staging directories are incomplete and must be ignored; failed runs clean them
+up, while forced termination may leave them behind. Reprocess intentionally into
+a separate output root. The DAG callable is `clean_batch(bronze_batch_dir,
+output_dir)` from `openFDA_pipeline.silver.device_enforcement`.
+
 ## Exploratory notebook
 
 With your Python environment activated, run from the repository root:

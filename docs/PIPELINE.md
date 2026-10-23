@@ -114,6 +114,59 @@ flowchart LR
 
 **Output:** Cleaned and standardized Parquet tables.
 
+#### Device enforcement Silver contract
+
+- `silver/device_enforcement.py` exposes `clean_batch(bronze_batch_dir,
+  output_dir=Path("data/silver"))`. The `silver` CLI discovers one pending completed
+  Bronze snapshot; `--bronze-batch` selects explicitly and `--output-dir` changes
+  the destination root. No pending batches is a successful no-op; several require
+  selection. Existing output batches are never overwritten.
+- Validate the Bronze endpoint, batch identity, schema version, file schemas,
+  declared counts, and source provenance. Read only manifest-listed files with
+  Hive inference disabled. Source-file/record-position pairs must be unique.
+  Broken input contracts fail the entire run before publication.
+- Execute packaged `standardize.sql`, `enforce_types.sql`, `validate.sql`, and
+  `deduplicate.sql` in order within one in-memory DuckDB connection. Python owns
+  batch handling, metadata, checks, and publication.
+- Rules version 1 recognizes Unicode whitespace, converts whitespace-only strings
+  to nulls, and trims identifiers,
+  categories, addresses, and location fields. Preserve literal `N/A` and nonblank
+  narrative/code/quantity/distribution text. Preserve the manufacturer display
+  value and add `recalling_firm_normalized` with lowercase and collapsed whitespace.
+  Keep identifiers/postal codes as strings and `openfda` as its original JSON text.
+- Parse the four source dates (`report_date`, `recall_initiation_date`,
+  `center_classification_date`, `termination_date`) as nullable `DATE` values,
+  requiring eight-digit `YYYYMMDD` syntax and a valid calendar date. Preserve the
+  original strings in corresponding `_raw` columns. Other source fields remain
+  nullable strings. Perform no imputation.
+- Quarantine missing recall numbers (`missing_recall_number`), missing source
+  report dates (`missing_report_date`), and supplied unparseable dates
+  (`invalid_<field>`). Optional missing dates and classifications remain null.
+- Retain warning-only records: `initiation_before_2004`,
+  `report_before_initiation`, `missing_event_id`, `unfamiliar_classification`,
+  and `unfamiliar_status`. Recognize `Class I`, `Class II`, `Class III`,
+  `Not Yet Classified`, and statuses `Ongoing`, `Completed`, `Terminated`.
+  `_error_codes` and `_warning_codes` are non-null string lists.
+- Within a snapshot, group by standardized nonempty recall number and compare
+  all original Bronze source fields, excluding provenance. Collapse exact valid
+  copies using source filename then record index as the deterministic order.
+  Audit redundant copies with their provenance and retained-row references.
+  Quarantine all conflicting versions (`conflicting_recall_number`), and preserve
+  every critically invalid copy in quarantine. Apply no cross-snapshot precedence.
+- Mirror the source ingestion date and batch ID under
+  `data/silver/device_enforcement/`. Publish `accepted.parquet`,
+  `quarantine.parquet`, `duplicates.parquet`, and `silver_metadata.json`.
+  Accepted/quarantined records retain cleaned values, original date strings,
+  quality codes, and Bronze provenance. The duplicate audit contains recall number,
+  source provenance, `_kept_source_file`, and `_kept_source_record_index`.
+- Require input count = accepted + quarantined + redundant copies. Write typed
+  empty outputs, verify readback schemas/counts and accepted-key uniqueness, then
+  publish by directory rename. Metadata includes input/output hashes, counts,
+  quality summaries, UTC times, schema/rule versions, SQL hashes, and tool versions.
+  Preserve Bronze unchanged and discard staging on failure.
+- Initial scope is cleaned snapshots. Entity resolution, cross-snapshot update
+  acceptance, a reconciled current table, and Gold outputs are separate tasks.
+
 ### Gold Layer — Analytics and Business Logic
 
 **Purpose:** Create curated datasets supporting domain-specific analytics, machine learning, and application features.
