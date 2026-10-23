@@ -8,6 +8,7 @@ import pytest
 import requests
 
 from openFDA_pipeline import backfill
+from openFDA_pipeline.ingestion import device_enforcement as ingestion
 
 
 def make_zip(members):
@@ -19,14 +20,23 @@ def make_zip(members):
 
 
 def make_manifest(counts):
-    return {"results": {"device": {"enforcement": {
-        "export_date": "2026-10-21",
-        "total_records": sum(counts),
-        "partitions": [
-            {"file": f"https://download.open.fda.gov/part-{index}.json.zip", "records": count}
-            for index, count in enumerate(counts, start=1)
-        ],
-    }}}}
+    return {
+        "results": {
+            "device": {
+                "enforcement": {
+                    "export_date": "2026-10-21",
+                    "total_records": sum(counts),
+                    "partitions": [
+                        {
+                            "file": f"https://download.open.fda.gov/part-{index}.json.zip",
+                            "records": count,
+                        }
+                        for index, count in enumerate(counts, start=1)
+                    ],
+                }
+            }
+        }
+    }
 
 
 def make_response(payload=None, content=None):
@@ -41,7 +51,7 @@ def make_response(payload=None, content=None):
 @pytest.fixture
 def session(monkeypatch):
     session_factory = MagicMock()
-    monkeypatch.setattr(backfill.requests, "Session", session_factory)
+    monkeypatch.setattr(ingestion.requests, "Session", session_factory)
     return session_factory.return_value.__enter__.return_value
 
 
@@ -59,24 +69,29 @@ def configure_downloads(session, counts, archives):
 
 def assert_no_partial_batch(output_dir):
     assert not list(output_dir.rglob("batch_id=*"))
-    assert not list(output_dir.rglob(".backfill-*"))
+    assert not list(output_dir.rglob(".ingest-*"))
     assert not list(output_dir.rglob("*.zip"))
     assert not list(output_dir.rglob("*.json"))
 
 
 def test_preserves_bytes_and_records_metadata(session, output_dir):
     content = b'{\n  "meta": {}, "results": [{"recall_number": "Z-1"}]\n}\n'
-    configure_downloads(session, [1], [
-        make_zip([("records.json", content), ("notes.txt", b"ignored")]),
-    ])
+    configure_downloads(
+        session,
+        [1],
+        [
+            make_zip([("records.json", content), ("notes.txt", b"ignored")]),
+        ],
+    )
     batch = backfill.run_backfill(output_dir)
     assert (batch / "records.json").read_bytes() == content
     assert {file.name for file in batch.iterdir()} == {
-        "records.json", "ingestion_metadata.json",
+        "records.json",
+        "ingestion_metadata.json",
     }
     metadata = json.loads((batch / "ingestion_metadata.json").read_text())
     assert metadata["endpoint"] == "/device/enforcement"
-    assert metadata["manifest_url"] == backfill.MANIFEST_URL
+    assert metadata["manifest_url"] == ingestion.MANIFEST_URL
     assert metadata["export_date"] == "2026-10-21"
     assert metadata["actual_records"] == 1
     assert metadata["expected_records"] == 1
@@ -87,24 +102,34 @@ def test_preserves_bytes_and_records_metadata(session, output_dir):
         "source_url": "https://download.open.fda.gov/part-1.json.zip",
         "expected_records": 1,
         "actual_records": 1,
-        "files": [{"filename": "records.json", "actual_records": 1,
-                   "sha256": hashlib.sha256(content).hexdigest()}],
+        "files": [
+            {
+                "filename": "records.json",
+                "actual_records": 1,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
     }
     assert not list(output_dir.rglob("*.zip"))
-    assert not list(output_dir.rglob(".backfill-*"))
-    session.get.assert_any_call(backfill.MANIFEST_URL, timeout=backfill.TIMEOUT)
+    assert not list(output_dir.rglob(".ingest-*"))
+    session.get.assert_any_call(ingestion.MANIFEST_URL, timeout=ingestion.TIMEOUT)
     session.get.assert_any_call(
-        "https://download.open.fda.gov/part-1.json.zip", stream=True,
-        timeout=backfill.TIMEOUT,
+        "https://download.open.fda.gov/part-1.json.zip",
+        stream=True,
+        timeout=ingestion.TIMEOUT,
     )
 
 
 def test_multiple_partitions_and_files(session, output_dir):
     record = b'{"results": [{}]}'
-    configure_downloads(session, [2, 1], [
-        make_zip([("folder/a.json", record), ("b.json", record)]),
-        make_zip([("c.json", record)]),
-    ])
+    configure_downloads(
+        session,
+        [2, 1],
+        [
+            make_zip([("folder/a.json", record), ("b.json", record)]),
+            make_zip([("c.json", record)]),
+        ],
+    )
     batch = backfill.run_backfill(output_dir)
     metadata = json.loads((batch / "ingestion_metadata.json").read_text())
     assert metadata["actual_records"] == 3
@@ -117,33 +142,39 @@ def test_missing_manifest_fields(field):
     manifest = make_manifest([1])
     del manifest["results"]["device"]["enforcement"][field]
     with pytest.raises(ValueError, match="Invalid.*manifest"):
-        backfill.validate_manifest(manifest)
+        ingestion.validate_manifest(manifest)
 
 
-@pytest.mark.parametrize(("field", "value"), [
-    pytest.param("export_date", "yesterday", id="invalid-date"),
-    pytest.param("partitions", [], id="empty-partitions"),
-    pytest.param("total_records", True, id="boolean-total"),
-    pytest.param("total_records", 2, id="inconsistent-total"),
-])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("export_date", "yesterday", id="invalid-date"),
+        pytest.param("partitions", [], id="empty-partitions"),
+        pytest.param("total_records", True, id="boolean-total"),
+        pytest.param("total_records", 2, id="inconsistent-total"),
+    ],
+)
 def test_invalid_manifest_fields(field, value):
     manifest = make_manifest([1])
     manifest["results"]["device"]["enforcement"][field] = value
     with pytest.raises(ValueError):
-        backfill.validate_manifest(manifest)
+        ingestion.validate_manifest(manifest)
 
 
-@pytest.mark.parametrize(("field", "value"), [
-    pytest.param("file", None, id="missing-url"),
-    pytest.param("file", "file:///tmp/data.zip", id="non-https-url"),
-    pytest.param("records", -1, id="negative-count"),
-    pytest.param("records", True, id="boolean-count"),
-])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("file", None, id="missing-url"),
+        pytest.param("file", "file:///tmp/data.zip", id="non-https-url"),
+        pytest.param("records", -1, id="negative-count"),
+        pytest.param("records", True, id="boolean-count"),
+    ],
+)
 def test_invalid_partition_fields(field, value):
     manifest = make_manifest([1])
     manifest["results"]["device"]["enforcement"]["partitions"][0][field] = value
     with pytest.raises(ValueError):
-        backfill.validate_manifest(manifest)
+        ingestion.validate_manifest(manifest)
 
 
 @pytest.mark.parametrize("stage", ["manifest", "download", "stream"])
@@ -152,43 +183,54 @@ def test_network_errors_exit_nonzero_and_cleanup(session, output_dir, capsys, st
     error = error_type("test network error")
     response = make_response(content=b"partial")
     if stage == "stream":
+
         def fail_midstream(chunk_size):
             yield b"partial"
             raise error
+
         response.iter_content.side_effect = fail_midstream
     else:
         response.raise_for_status.side_effect = error
     session.get.side_effect = (
-        [response] if stage == "manifest"
-        else [make_response(payload=make_manifest([1])), response]
+        [response] if stage == "manifest" else [make_response(payload=make_manifest([1])), response]
     )
     assert backfill.main(["--output-dir", str(output_dir)]) == 1
     assert "Backfill failed" in capsys.readouterr().err
     assert_no_partial_batch(output_dir)
 
 
-@pytest.mark.parametrize("archive", [
-    pytest.param(b"not a zip", id="invalid-zip"),
-    pytest.param(
-        make_zip([("a.json", b'{"results": [{}]}')]).replace(
-            b'{"results": [{}]}', b'x' * len(b'{"results": [{}]}'), 1,
+@pytest.mark.parametrize(
+    "archive",
+    [
+        pytest.param(b"not a zip", id="invalid-zip"),
+        pytest.param(
+            make_zip([("a.json", b'{"results": [{}]}')]).replace(
+                b'{"results": [{}]}',
+                b"x" * len(b'{"results": [{}]}'),
+                1,
+            ),
+            id="corrupt-crc",
         ),
-        id="corrupt-crc",
-    ),
-    pytest.param(make_zip([("a.json", b"not JSON")]), id="invalid-json"),
-    pytest.param(make_zip([("a.json", b'{"results": {}}')]), id="results-not-list"),
-    pytest.param(make_zip([("a.json", b'[]')]), id="envelope-not-object"),
-    pytest.param(make_zip([("a.json", b'{"results": []}')]), id="count-mismatch"),
-    pytest.param(make_zip([("notes.txt", b"no data")]), id="no-json"),
-    pytest.param(make_zip([("../a.json", b'{}')]), id="parent-path"),
-    pytest.param(make_zip([("/a.json", b'{}')]), id="absolute-path"),
-    pytest.param(make_zip([("folder\\a.json", b'{}')]), id="backslash-path"),
-    pytest.param(make_zip([("ingestion_metadata.json", b'{}')]), id="reserved-name"),
-    pytest.param(make_zip([
-        ("folder/a.json", b'{"results": [{}]}'),
-        ("other/a.json", b'{"results": [{}]}'),
-    ]), id="duplicate-basename"),
-])
+        pytest.param(make_zip([("a.json", b"not JSON")]), id="invalid-json"),
+        pytest.param(make_zip([("a.json", b'{"results": {}}')]), id="results-not-list"),
+        pytest.param(make_zip([("a.json", b"[]")]), id="envelope-not-object"),
+        pytest.param(make_zip([("a.json", b'{"results": []}')]), id="count-mismatch"),
+        pytest.param(make_zip([("notes.txt", b"no data")]), id="no-json"),
+        pytest.param(make_zip([("../a.json", b"{}")]), id="parent-path"),
+        pytest.param(make_zip([("/a.json", b"{}")]), id="absolute-path"),
+        pytest.param(make_zip([("folder\\a.json", b"{}")]), id="backslash-path"),
+        pytest.param(make_zip([("ingestion_metadata.json", b"{}")]), id="reserved-name"),
+        pytest.param(
+            make_zip(
+                [
+                    ("folder/a.json", b'{"results": [{}]}'),
+                    ("other/a.json", b'{"results": [{}]}'),
+                ]
+            ),
+            id="duplicate-basename",
+        ),
+    ],
+)
 def test_invalid_archives_and_json_never_publish(session, output_dir, archive):
     configure_downloads(session, [1], [archive])
     with pytest.raises(ValueError):
@@ -220,7 +262,7 @@ def test_corrupt_deflate_stream_exits_cleanly(session, output_dir, capsys):
         archive.writestr("a.json", b'{"results": [{}]}')
     content = bytearray(buffer.getvalue())
     # The local header is 30 bytes, followed by the six-byte filename.
-    content[36] = 0xff  # Invalid DEFLATE block type.
+    content[36] = 0xFF  # Invalid DEFLATE block type.
     configure_downloads(session, [1], [bytes(content)])
     assert backfill.main(["--output-dir", str(output_dir)]) == 1
     assert "Cannot read ZIP archive" in capsys.readouterr().err
@@ -234,13 +276,11 @@ def test_reruns_and_later_failure_preserve_existing_batch(session, output_dir):
         configure_downloads(session, [1], [archive])
         batches.append(backfill.run_backfill(output_dir))
     assert batches[0] != batches[1]
-    original = {
-        path: path.read_bytes() for batch in batches for path in batch.iterdir()
-    }
+    original = {path: path.read_bytes() for batch in batches for path in batch.iterdir()}
     configure_downloads(session, [1, 1], [archive, b"invalid zip"])
     with pytest.raises(ValueError):
         backfill.run_backfill(output_dir)
     assert set(output_dir.rglob("batch_id=*")) == set(batches)
-    assert not list(output_dir.rglob(".backfill-*"))
+    assert not list(output_dir.rglob(".ingest-*"))
     for path, content in original.items():
         assert path.read_bytes() == content

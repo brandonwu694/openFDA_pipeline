@@ -12,6 +12,14 @@ Bronze Parquet is a shared input for downstream Python or SQL/dbt tasks, each
 owning its outputs. dbt requires a SQL engine that can access the Parquet data.
 No orchestration framework is required by the conversion implementation.
 
+```mermaid
+flowchart LR
+    I[Ingest FDA export] --> R[Completed Raw batch]
+    R --> B[Bronze: JSON to Parquet]
+    B --> S[Silver: cleaning and validation]
+    S --> G[Gold: analytics and features]
+```
+
 ### Raw Layer — Source Preservation
 
 **Purpose:** Preserve original openFDA API responses exactly as received to ensure reproducibility, traceability, and recoverability.
@@ -23,6 +31,28 @@ No orchestration framework is required by the conversion implementation.
 - Retain historical source responses to support reprocessing and auditing.
 
 **Output:** Immutable, original JSON files.
+
+#### Device enforcement ingestion node
+
+- Implemented in `ingestion/device_enforcement.py`, callable through
+  `ingest_device_enforcement(output_dir=Path("data/raw"), force=False)` or `ingest`.
+  `backfill` delegates to the same downloader with `force=True`.
+- Fetch the FDA download manifest and select all `/device/enforcement` partitions.
+  Bulk updates are complete snapshots, including possible historical corrections.
+- Match previous exports by export date, partition URLs, and record counts.
+  Before skipping a matching completed batch, verify its local file checksums
+  and metadata counts. These checks do not detect remote content revisions under
+  an unchanged advertised identity; `--force` captures a fresh snapshot when needed.
+- Preserve JSON bytes, validate ZIP integrity and counts, discard ZIPs, and publish
+  only completed batches. Stage under `.ingest-*`; retain older snapshots unchanged.
+- Stamp ingestion dates and timestamps in UTC using the existing Raw directory
+  and metadata contract. Return the new batch path for downstream DAG tasks, or
+  `None` when no new snapshot was published. Failure raises an error or exits
+  nonzero from the CLI, leaving existing batches intact.
+- Perform no format conversion or cleaning and invoke no downstream tasks.
+  A future orchestrator passes the returned path to Bronze and retries failed
+  downstream processing using the already published Raw batch. Scheduling is
+  external to this node.
 
 ### Bronze Layer — Format Conversion
 

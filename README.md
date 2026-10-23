@@ -4,13 +4,48 @@
 
 The goal of this project is to develop a pipeline that ingests, processes, and makes openFDA medical device recall data ready for analysis and machine learning.
 
+## Ingestion
+
+With your Python environment activated, install the package from the repository
+root and run the ingestion node:
+
+```sh
+python -m pip install .
+ingest
+```
+
+`ingest` checks FDA's bulk-download manifest for `/device/enforcement`. It
+downloads every partition for a newly advertised export and publishes unchanged
+JSON under `data/raw/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=.../`.
+The ingestion date and metadata timestamps use UTC. Files and metadata follow
+the same contract as the initial backfill.
+
+If the export date, partition URLs, and counts match a completed local batch,
+ingestion verifies its source checksums and exits successfully without creating
+another batch. Use `ingest --force` to capture a fresh snapshot, including when
+you suspect a source revision under the same advertised export identity. A
+damaged matching local batch fails explicitly; `--force` downloads a separate
+replacement while preserving existing files. Use `--output-dir /path/to/raw`
+to select another Raw root.
+
+openFDA bulk updates are complete snapshots that may contain historical
+corrections; ingestion downloads all partitions rather than appending only
+recently dated recalls. See [FDA's download guidance](https://open.fda.gov/apis/downloads/).
+
+Ingestion stops after Raw publication. Run `bronze` separately to convert a
+pending batch. For a DAG, call `ingest_device_enforcement()` from
+`openFDA_pipeline.ingestion.device_enforcement`; it returns a new Raw batch
+`Path`, or `None` when the advertised export is already stored. Pass a returned
+path directly to `convert_batch()`. Retry a failed downstream task against its
+existing Raw batch. No scheduler or automatic downstream execution is installed.
+
 ## One-time backfill
 
 Requires Python 3.11+. Activate your Python environment and run from the
 repository root. Install once (or reinstall to register the new `backfill` command):
 
 ```sh
-python -m pip install -e .
+python -m pip install .
 ```
 
 Then run:
@@ -18,6 +53,9 @@ Then run:
 ```sh
 backfill
 ```
+
+`backfill` uses the shared ingestion implementation and always downloads a fresh
+snapshot. Use `ingest` for subsequent export checks.
 
 Downloads all `/device/enforcement` partitions from the
 [openFDA manifest](https://api.fda.gov/download.json) into a current historical
@@ -48,9 +86,10 @@ files and exit with a nonzero status. Fix the reported error and rerun to start
 again. Successful reruns create new batches without overwriting earlier ones.
 
 Downstream processing should select one completed batch and read the data files
-listed in its metadata. Ignore hidden `.backfill-*` staging directories, which
-may remain after forced termination. Raw data is excluded from Git; cleaning and
-Parquet conversion follow in the [downstream layers](docs/PIPELINE.md).
+listed in its metadata. Ignore hidden `.ingest-*` (and older `.backfill-*`)
+staging directories, which may remain after forced termination. Raw data is
+excluded from Git; cleaning and Parquet conversion follow in the
+[downstream layers](docs/PIPELINE.md).
 
 ## Bronze conversion
 

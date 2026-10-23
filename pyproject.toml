@@ -15,6 +15,7 @@ notebook = ["jupyterlab>=4", "pandas>=2.2", "matplotlib>=3.8"]
 
 [project.scripts]
 backfill = "openFDA_pipeline.backfill:main"
+ingest = "openFDA_pipeline.ingestion.device_enforcement:main"
 bronze = "openFDA_pipeline.bronze.raw_to_bronze:main"
 
 [tool.setuptools.packages.find]
