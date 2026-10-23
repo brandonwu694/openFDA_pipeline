@@ -58,12 +58,22 @@ Install or reinstall the package to register the `bronze` command:
 
 ```sh
 python -m pip install .
+bronze
+```
+
+From the repository root, `bronze` discovers completed batches under
+`data/raw/device_enforcement/` and converts the sole batch without a published
+Bronze counterpart. If none are pending, it reports that and exits successfully.
+If several are pending, it lists them and requires an explicit selection:
+
+```sh
 bronze --raw-batch data/raw/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=YOUR_BATCH_ID
 ```
 
-Replace the date and batch ID with a completed Raw batch. Use `--output-dir` to
-override the default `data/bronze/` root. Each source JSON file produces one
-Snappy-compressed Parquet file in manifest order:
+Replace the date and batch ID with the chosen batch. Use `--output-dir` to
+override the default `data/bronze/` root; discovery checks for existing outputs
+under that root. Each source JSON file produces one Snappy-compressed Parquet
+file in manifest order:
 
 ```text
 data/bronze/device_enforcement/
@@ -80,7 +90,9 @@ nulls. Unknown source fields or incompatible types require schema review.
 Cleaning and date parsing remain in Silver.
 
 Outputs are published only after Parquet readback validates schema and counts.
-Failed runs remove staging files; reruns reject an existing completed batch.
+Failed runs remove staging files. Automatic discovery skips published batches;
+explicit `--raw-batch` reruns reject an existing output. A destination without
+conversion metadata requires inspection and is never silently skipped.
 Use a separate output root for intentional reprocessing. For programmatic DAG
 use, call `convert_batch(raw_batch_dir, output_dir)` from
 `openFDA_pipeline.bronze.raw_to_bronze`; it returns the completed batch path.

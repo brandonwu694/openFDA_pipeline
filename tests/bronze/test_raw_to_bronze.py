@@ -10,14 +10,13 @@ from openFDA_pipeline.bronze import raw_to_bronze as bronze
 
 @pytest.fixture
 def raw_batch_factory(tmp_path):
-    def create(groups=None):
+    def create(groups=None, *, batch_id="example-batch"):
         if groups is None:
             groups = [[[{
                 "recall_number": "Z-0001-2026", "event_id": "00123",
                 "report_date": "20261014", "openfda": {},
             }]]]
-        batch_id = "example-batch"
-        batch = tmp_path / "raw/device_enforcement/ingestion_date=2026-10-23" / f"batch_id={batch_id}"
+        batch = tmp_path / "data/raw/device_enforcement/ingestion_date=2026-10-23" / f"batch_id={batch_id}"
         batch.mkdir(parents=True)
         partitions = []
         index = 0
@@ -306,3 +305,76 @@ def test_cli_success_and_failure(raw_batch, output_root, capsys):
     assert "Bronze conversion complete" in capsys.readouterr().out
     assert bronze.main(args) == 1
     assert "already exists" in capsys.readouterr().err
+
+
+def test_bare_command_converts_sole_pending_batch_then_skips_it(raw_batch, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert bronze.main([]) == 0
+    batch = tmp_path / "data/bronze/device_enforcement" / raw_batch.parent.name / raw_batch.name
+    assert (batch / "part-0001.parquet").is_file()
+    assert "Bronze conversion complete" in capsys.readouterr().out
+    original = {file.name: file.read_bytes() for file in batch.iterdir()}
+    assert bronze.main([]) == 0
+    assert "No completed Raw batches need conversion" in capsys.readouterr().out
+    assert {file.name: file.read_bytes() for file in batch.iterdir()} == original
+
+
+@pytest.mark.parametrize("incomplete_input", ["missing-root", "missing-metadata", "staging"])
+def test_discovery_ignores_incomplete_inputs(tmp_path, monkeypatch, capsys, incomplete_input):
+    monkeypatch.chdir(tmp_path)
+    if incomplete_input == "missing-metadata":
+        (tmp_path / "data/raw/device_enforcement/ingestion_date=2026-10-23/batch_id=incomplete").mkdir(parents=True)
+    elif incomplete_input == "staging":
+        staging = tmp_path / "data/raw/device_enforcement/.backfill-example/batch"
+        staging.mkdir(parents=True)
+        (staging / "ingestion_metadata.json").write_text("{}")
+    assert bronze.main([]) == 0
+    assert "No completed Raw batches need conversion" in capsys.readouterr().out
+    assert not (tmp_path / "data/bronze").exists()
+
+
+def test_discovery_requires_selection_for_multiple_pending_batches(raw_batch_factory, tmp_path, monkeypatch, capsys):
+    first = raw_batch_factory(batch_id="first")
+    second = raw_batch_factory(batch_id="second")
+    monkeypatch.chdir(tmp_path)
+    assert bronze.main([]) == 1
+    error = capsys.readouterr().err
+    assert "Multiple pending Raw batches" in error
+    assert "--raw-batch" in error
+    assert first.name in error and second.name in error
+    assert not (tmp_path / "data/bronze").exists()
+
+
+def test_explicit_selection_bypasses_ambiguity_and_discovery_selects_remaining_batch(
+    raw_batch_factory, output_root, tmp_path, monkeypatch,
+):
+    first = raw_batch_factory(batch_id="first")
+    second = raw_batch_factory(batch_id="second")
+    monkeypatch.chdir(tmp_path)
+    assert bronze.main(["--raw-batch", str(first), "--output-dir", str(output_root)]) == 0
+    assert bronze.main(["--output-dir", str(output_root)]) == 0
+    endpoint = output_root / "device_enforcement" / first.parent.name
+    assert (endpoint / first.name / "conversion_metadata.json").is_file()
+    assert (endpoint / second.name / "conversion_metadata.json").is_file()
+    assert not (tmp_path / "data/bronze").exists()
+
+
+def test_discovery_reports_invalid_raw_metadata(raw_batch, tmp_path, monkeypatch, capsys):
+    metadata = load_metadata(raw_batch)
+    metadata["batch_id"] = "wrong-id"
+    write_metadata(raw_batch, metadata)
+    monkeypatch.chdir(tmp_path)
+    assert bronze.main([]) == 1
+    assert "directory name does not match batch_id" in capsys.readouterr().err
+    assert not (tmp_path / "data/bronze").exists()
+
+
+def test_discovery_rejects_incomplete_bronze_destination(raw_batch, tmp_path, monkeypatch, capsys):
+    destination = tmp_path / "data/bronze/device_enforcement" / raw_batch.parent.name / raw_batch.name
+    destination.mkdir(parents=True)
+    partial = destination / "part-0001.parquet"
+    partial.write_bytes(b"incomplete output")
+    monkeypatch.chdir(tmp_path)
+    assert bronze.main([]) == 1
+    assert "no conversion_metadata.json" in capsys.readouterr().err
+    assert partial.read_bytes() == b"incomplete output"

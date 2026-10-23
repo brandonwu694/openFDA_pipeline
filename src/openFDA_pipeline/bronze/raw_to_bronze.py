@@ -1,17 +1,16 @@
 """Convert one completed device enforcement Raw batch to Parquet."""
 
 import argparse
-from datetime import date, datetime, timezone
 import hashlib
-from importlib.metadata import PackageNotFoundError, version
 import json
-from pathlib import Path
 import sys
 import tempfile
+from datetime import date, datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 
 ENDPOINT = "/device/enforcement"
 SCHEMA_VERSION = 1
@@ -279,16 +278,56 @@ def convert_batch(raw_batch_dir: Path, output_dir: Path = Path("data/bronze")) -
     return final_dir
 
 
+def _find_pending_batch(raw_root, output_dir):
+    """Select the sole completed Raw batch without a published Bronze counterpart."""
+    pending_batches = []
+    endpoint_dir = raw_root / "device_enforcement"
+    metadata_paths = endpoint_dir.glob("ingestion_date=*/batch_id=*/ingestion_metadata.json")
+    for metadata_path in sorted(metadata_paths):
+        raw_batch_dir = metadata_path.parent
+        _load_batch_metadata(raw_batch_dir.resolve())
+        bronze_batch_dir = (
+            output_dir / "device_enforcement" / raw_batch_dir.parent.name / raw_batch_dir.name
+        )
+        if (bronze_batch_dir / "conversion_metadata.json").is_file():
+            continue
+        if bronze_batch_dir.exists():
+            raise ValueError(
+                f"Existing Bronze path has no conversion_metadata.json: {bronze_batch_dir}; "
+                "inspect it or choose a separate --output-dir"
+            )
+        pending_batches.append(raw_batch_dir)
+    if len(pending_batches) > 1:
+        choices = "\n".join(f"  {batch}" for batch in pending_batches)
+        raise ValueError(
+            f"Multiple pending Raw batches found. Select one with --raw-batch:\n{choices}"
+        )
+    return pending_batches[0] if pending_batches else None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw-batch", type=Path, required=True, help="Completed Raw batch directory")
+    parser.add_argument(
+        "--raw-batch", type=Path,
+        help="Completed Raw batch directory (default: discover the sole pending batch under data/raw)",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("data/bronze"),
         help="Bronze root (default: data/bronze relative to the current directory)",
     )
     args = parser.parse_args(argv)
     try:
-        convert_batch(args.raw_batch, args.output_dir)
+        raw_batch_dir = args.raw_batch
+        if raw_batch_dir is None:
+            raw_root = Path("data/raw")
+            raw_batch_dir = _find_pending_batch(raw_root, args.output_dir)
+            if raw_batch_dir is None:
+                print(
+                    f"No completed Raw batches need conversion under "
+                    f"{raw_root / 'device_enforcement'}."
+                )
+                return 0
+        convert_batch(raw_batch_dir, args.output_dir)
     except (OSError, ValueError, pa.ArrowException) as error:
         print(f"Bronze conversion failed: {error}", file=sys.stderr)
         return 1

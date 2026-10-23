@@ -41,6 +41,12 @@ No orchestration framework is required by the conversion implementation.
 
 - Implemented by `bronze/raw_to_bronze.py`, callable as
   `convert_batch(raw_batch_dir, output_dir)` or through `bronze --raw-batch ...`.
+- The bare `bronze` command discovers completed batches under `data/raw/` and
+  converts the sole batch missing its published Bronze counterpart. No pending
+  batches is a successful no-op; multiple pending batches require explicit
+  `--raw-batch` selection. Discovery uses the selected `--output-dir` root,
+  ignores staging directories, and rejects existing destinations without
+  conversion metadata. Explicit conversion remains available for DAG execution.
 - Read files in ingestion-manifest order and verify SHA-256 checksums and file,
   partition, and batch counts. Process one JSON file at a time and write one
   Snappy-compressed Parquet file per source file.
