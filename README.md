@@ -52,6 +52,21 @@ listed in its metadata. Ignore hidden `.backfill-*` staging directories, which
 may remain after forced termination. Raw data is excluded from Git; cleaning and
 Parquet conversion follow in the [downstream layers](docs/PIPELINE.md).
 
+## Exploratory notebook
+
+With your Python environment activated, run from the repository root:
+
+```sh
+python -m pip install ".[notebook]"
+python -m jupyterlab notebooks/01_device_enforcement_eda.ipynb
+```
+
+The notebook selects one explicit completed Raw batch in its first code cell.
+Update that relative path to explore another batch, then run all cells in order.
+It examines structure, missing values, identifiers, dates, and distributions
+without changing Raw files or writing datasets. Use the kernel from the same
+Python environment. Clear cell outputs before committing the notebook.
+
 ## Tests
 
 Install the test dependencies and run the offline pytest suite from the repository root:
