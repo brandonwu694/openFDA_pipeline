@@ -1,213 +1,125 @@
 # openFDA Pipeline
 
-## Project Overview
+Process openFDA medical device recall enforcement data through
+**Raw → Bronze → Silver → Gold** for analysis and future machine learning projects.
 
-The goal of this project is to develop a pipeline that ingests, processes, and makes openFDA medical device recall data ready for analysis and machine learning.
-
-## Gold analytics
-
-After Silver cleaning, install or reinstall the package to register `gold`:
-
-```sh
-python -m pip install .
-gold
-```
-
-`gold` builds analytics for the sole pending completed Silver batch. No pending
-batch is a successful no-op; multiple batches require explicit selection:
-
-```sh
-gold --silver-batch data/silver/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=YOUR_BATCH_ID
-```
-
-Use `--output-dir` to change the default `data/gold/` root. Outputs mirror the
-source ingestion date and batch ID and contain `recall_detail.parquet`,
-`recall_monthly.parquet`, `recall_by_firm.parquet`, `recall_by_status.parquet`,
-and `gold_metadata.json`. Existing output batches are never overwritten; choose
-another output root for intentional reprocessing. Ignore hidden `.gold-*` staging
-directories left by forced termination.
-
-For DAG use, `from openFDA_pipeline.gold import build_gold`, then call
-`build_gold(silver_batch_dir)` to obtain the published batch path. Gold uses only
-Silver accepted records, preserving narratives, warnings, and source provenance.
-It adds date dimensions, flagged date intervals, classification indicators, text
-features, and summary counts. Targets and training datasets remain deferred.
-
-Select **one snapshot per analysis**. Complete snapshots overlap, event counts
-are not additive, and monthly/firm Class I shares repeat across classification
-rows. Reported status is not a live recall lifecycle measure; firm addresses do
-not describe affected geography. See the [Gold contract](docs/PIPELINE.md#device-enforcement-gold-contract)
-for table grains, metric definitions, feature semantics, and usage limits.
-
-## Ingestion
-
-With your Python environment activated, install the package from the repository
-root and run the ingestion node:
-
-```sh
-python -m pip install .
-ingest
-```
-
-`ingest` checks FDA's bulk-download manifest for `/device/enforcement`. It
-downloads every partition for a newly advertised export and publishes unchanged
-JSON under `data/raw/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=.../`.
-The ingestion date and metadata timestamps use UTC. Files and metadata follow
-the same contract as the initial backfill.
-
-If the export date, partition URLs, and counts match a completed local batch,
-ingestion verifies its source checksums and exits successfully without creating
-another batch. Use `ingest --force` to capture a fresh snapshot, including when
-you suspect a source revision under the same advertised export identity. A
-damaged matching local batch fails explicitly; `--force` downloads a separate
-replacement while preserving existing files. Use `--output-dir /path/to/raw`
-to select another Raw root.
-
-openFDA bulk updates are complete snapshots that may contain historical
-corrections; ingestion downloads all partitions rather than appending only
-recently dated recalls. See [FDA's download guidance](https://open.fda.gov/apis/downloads/).
-
-Ingestion stops after Raw publication. Run `bronze` separately to convert a
-pending batch. For a DAG, call `ingest_device_enforcement()` from
-`openFDA_pipeline.ingestion.device_enforcement`; it returns a new Raw batch
-`Path`, or `None` when the advertised export is already stored. Pass a returned
-path directly to `convert_batch()`. Retry a failed downstream task against its
-existing Raw batch. No scheduler or automatic downstream execution is installed.
-
-## One-time backfill
+## Run the complete pipeline
 
 Requires Python 3.11+. Activate your Python environment and run from the
-repository root. Install once (or reinstall to register the new `backfill` command):
+repository root:
 
 ```sh
 python -m pip install .
+python -m openFDA_pipeline.pipeline --data-root data
 ```
 
-Then run:
+This runs the orchestration code in
+[`pipeline/pipeline.py`](src/openFDA_pipeline/pipeline/pipeline.py). The equivalent
+installed command is:
 
 ```sh
-backfill
+openfda-pipeline --data-root data
 ```
 
-`backfill` uses the shared ingestion implementation and always downloads a fresh
-snapshot. Use `ingest` for subsequent export checks.
+The runner checks FDA's bulk-download manifest for a new `/device/enforcement`
+export, then processes all unfinished snapshots oldest first through Gold.
+The first run downloads the full available snapshot and builds all layers;
+you do not need to run a separate backfill or call each layer manually.
+Subsequent runs check for updates and resume any unfinished downstream work.
+Use `--data-root /path/to/data` to change the root for all four layers.
 
-Downloads all `/device/enforcement` partitions from the
-[openFDA manifest](https://api.fda.gov/download.json) into a current historical
-snapshot. FDA describes the endpoint as covering 2004–present, but the verified
-October 21, 2026 export contains 40,300 records with `report_date` values from
-June 20, 2012 through October 14, 2026. This is the observed report-date range for
-that snapshot, not a filter applied by the script or a guarantee for future exports.
+## Reruns and recovery
 
-The default output is `data/raw/`, relative to the current working directory.
-To use a different location:
+- **No new export and no unfinished work:** return `noop` without writing data
+  or metadata. Existing publications are validated and skipped.
+- **Unfinished processing:** reuse completed stages and run only missing
+  downstream stages, even if FDA has no new export.
+- **Failure:** stop dependent stages and later batches, preserve completed
+  outputs, and exit nonzero with stage/batch context. Rerun the same command
+  after resolving the error; there are no automatic retries.
+- **Damaged or incomplete publications:** report the problem for inspection;
+  never overwrite, delete, or silently rebuild existing outputs. Directory access
+  errors are reported as discovery failures.
 
-```sh
-backfill --output-dir /path/to/raw
+Hidden staging directories are ignored. The runner recognizes batches created
+with standalone commands, including those whose earlier layers are absent;
+a gap between existing published layers causes an error. Run one instance per
+root. Scheduling is external; there is no separate progress database or
+persistent run log.
+
+## Output datasets
+
+Each layer keeps snapshots under
+`data/<layer>/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=.../`.
+Dates and metadata timestamps use UTC.
+
+| Layer | Published output |
+| --- | --- |
+| Raw | Original JSON responses and `ingestion_metadata.json` |
+| Bronze | Source-preserving Parquet files and `conversion_metadata.json` |
+| Silver | `accepted.parquet`, `quarantine.parquet`, `duplicates.parquet`, and `silver_metadata.json` |
+| Gold | `recall_detail.parquet`, `recall_monthly.parquet`, `recall_by_firm.parquet`, `recall_by_status.parquet`, and `gold_metadata.json` |
+
+Gold uses Silver accepted records and preserves narratives, warnings, and source
+provenance. It adds date dimensions, flagged date intervals, classification
+indicators, text features, and summary counts. Targets and training datasets
+remain deferred.
+
+Select **one snapshot per analysis**. Exports are complete snapshots and can
+include historical corrections; combining batches multiplies recall records.
+Event counts are not additive, and monthly/firm Class I shares repeat across
+classification rows. Reported status is not a live recall lifecycle measure;
+firm addresses do not describe affected geography.
+
+See the [pipeline architecture](docs/PIPELINE.md) and
+[Gold contract](docs/PIPELINE.md#device-enforcement-gold-contract) for layer
+responsibilities, validation rules, table grains, and metric definitions.
+
+## Use the runner from Python
+
+```python
+from pathlib import Path
+from openFDA_pipeline.pipeline import OpenFDADeviceEnforcementPipeline, PipelineRunError
+
+pipeline = OpenFDADeviceEnforcementPipeline(data_root=Path("data"))
+try:
+    result = pipeline.run()
+except PipelineRunError as error:
+    print(error.stage, error.batch_path, error.result)
+    raise
 ```
 
-```text
-data/raw/device_enforcement/
-  ingestion_date=YYYY-MM-DD/
-    batch_id=<UTC-timestamp>_<UUID>/
-      device-enforcement-0001-of-0001.json
-      ingestion_metadata.json
-```
+`PipelineRunResult` contains `status` (`completed` or `noop`), `new_raw_batch`
+(`Path` or `None`), and `batches`. Each batch result includes `ingestion_date`,
+`batch_id`, published `paths` by layer, `completed_stages`, and `skipped_stages`.
+The newly ingested Raw stage counts as completed. On failure, the exception's
+`result` preserves partial progress with `status=None`, and its cause is the
+original error.
 
-Preserves JSON bytes, validates ZIP integrity and record counts, then discards
-ZIPs. Separate metadata records provenance, timestamps, counts, and SHA-256
-checksums. Only validated batches are published; failed runs clean up temporary
-files and exit with a nonzero status. Fix the reported error and rerun to start
-again. Successful reruns create new batches without overwriting earlier ones.
+## Individual stage commands (advanced)
 
-Downstream processing should select one completed batch and read the data files
-listed in its metadata. Ignore hidden `.ingest-*` (and older `.backfill-*`)
-staging directories, which may remain after forced termination. Raw data is
-excluded from Git; cleaning and Parquet conversion follow in the
-[downstream layers](docs/PIPELINE.md).
+Use these for isolated processing, troubleshooting, or intentional reprocessing.
+Normal operation uses the complete pipeline runner above. Each command stops
+at its own layer.
 
-## Bronze conversion
+| Command | Purpose | Explicit batch selection |
+| --- | --- | --- |
+| `ingest` | Check for a new export and publish Raw | Not applicable |
+| `bronze` | Convert Raw JSON to Parquet | `--raw-batch <raw-batch-directory>` |
+| `silver` | Clean, validate, and deduplicate Bronze | `--bronze-batch <bronze-batch-directory>` |
+| `gold` | Build analytical tables from Silver | `--silver-batch <silver-batch-directory>` |
 
-Install or reinstall the package to register the `bronze` command:
+Bronze, Silver, and Gold discover the sole pending batch by default. No pending
+batch is a successful no-op; several require explicit selection. Unlike the
+full runner, these commands do not process the entire backlog. `--output-dir`
+changes an individual command's destination root. Existing output batches are
+never overwritten; use a separate output root for intentional reprocessing.
 
-```sh
-python -m pip install .
-bronze
-```
-
-From the repository root, `bronze` discovers completed batches under
-`data/raw/device_enforcement/` and converts the sole batch without a published
-Bronze counterpart. If none are pending, it reports that and exits successfully.
-If several are pending, it lists them and requires an explicit selection:
-
-```sh
-bronze --raw-batch data/raw/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=YOUR_BATCH_ID
-```
-
-Replace the date and batch ID with the chosen batch. Use `--output-dir` to
-override the default `data/bronze/` root; discovery checks for existing outputs
-under that root. Each source JSON file produces one Snappy-compressed Parquet
-file in manifest order:
-
-```text
-data/bronze/device_enforcement/
-  ingestion_date=YYYY-MM-DD/
-    batch_id=YOUR_BATCH_ID/
-      part-0001.parquet
-      conversion_metadata.json
-```
-
-Bronze verifies source checksums and counts, preserves strings and row order,
-and adds source batch/file/record-position columns. `openfda` objects are stored
-as JSON text, including `{}`; missing keys and explicit nulls become Parquet
-nulls. Unknown source fields or incompatible types require schema review.
-Cleaning and date parsing remain in Silver.
-
-Outputs are published only after Parquet readback validates schema and counts.
-Failed runs remove staging files. Automatic discovery skips published batches;
-explicit `--raw-batch` reruns reject an existing output. A destination without
-conversion metadata requires inspection and is never silently skipped.
-Use a separate output root for intentional reprocessing. For programmatic DAG
-use, call `convert_batch(raw_batch_dir, output_dir)` from
-`openFDA_pipeline.bronze.raw_to_bronze`; it returns the completed batch path.
-Ignore hidden `.bronze-*` staging directories, which may remain after forced
-termination. Select one completed Bronze batch for downstream processing.
-
-## Silver cleaning
-
-Install or reinstall the package, then clean the sole pending Bronze snapshot:
-
-```sh
-python -m pip install .
-silver
-```
-
-Use `silver --bronze-batch <completed-bronze-batch-directory>` for explicit
-selection and `--output-dir /path/to/silver` to change the output root. With no
-pending batches the command exits successfully; with several it lists candidates
-and requires a selection. Explicit reruns reject existing outputs.
-
-Outputs mirror the ingestion date and batch ID under
-`data/silver/device_enforcement/`: `accepted.parquet`, `quarantine.parquet`,
-`duplicates.parquet`, and `silver_metadata.json`. Even empty dispositions have
-typed Parquet files. Select one completed snapshot for downstream analysis;
-cross-snapshot reconciliation and a current view are not implemented yet.
-
-Four packaged SQL steps standardize fields, parse dates, assign quality codes,
-and deduplicate records through DuckDB. Missing required identifiers/report dates
-and unparseable supplied dates go to quarantine. Suspicious but parseable dates
-and unfamiliar categories remain accepted with warnings. Exact copies retain a
-deterministic representative; conflicting values for one recall number quarantine
-the entire group. Inspect `_error_codes` and `_warning_codes` when using outputs.
-There is no imputation or manufacturer entity matching.
-
-Original date strings and source provenance remain inspectable. Metadata records
-input/output checksums, counts, quality summaries, and schema, rule, SQL, and tool
-versions. Publication is atomic after readback validation. Hidden `.silver-*`
-staging directories are incomplete and must be ignored; failed runs clean them
-up, while forced termination may leave them behind. Reprocess intentionally into
-a separate output root. The DAG callable is `clean_batch(bronze_batch_dir,
-output_dir)` from `openFDA_pipeline.silver.device_enforcement`.
+`ingest --force` or `backfill` always downloads a fresh Raw snapshot, preserving
+older batches. These are optional tools for capturing a fresh copy, including
+suspected source corrections under an unchanged advertised export identity.
+When using the default Raw root, rerun the full pipeline afterward to process
+the new batch through Gold.
 
 ## Exploratory notebook
 

@@ -12,6 +12,13 @@ Bronze Parquet is a shared input for downstream Python or SQL/dbt tasks, each
 owning its outputs. dbt requires a SQL engine that can access the Parquet data.
 No orchestration framework is required by the conversion implementation.
 
+The `pipeline/` package provides
+`OpenFDADeviceEnforcementPipeline(data_root=Path("data"))` and the
+`openfda-pipeline --data-root data` CLI. Its `pipeline.py` module owns execution,
+stage methods, and recovery; `validation.py` owns read-only publication and lineage
+checks. Layer-specific validation stays in each layer. The runner calls the
+existing stage functions sequentially and adds no transformation logic or dependencies.
+
 ```mermaid
 flowchart LR
     I[Ingest FDA export] --> R[Completed Raw batch]
@@ -19,6 +26,44 @@ flowchart LR
     B --> S[Silver: cleaning and validation]
     S --> G[Gold: analytics and features]
 ```
+
+### Pipeline execution and recovery
+
+- `.run()` calls ingestion once with `force=False`, then discovers batch
+  directories across all four layers under the configured data root. It groups
+  them by ingestion date/batch ID and processes them in that order, oldest first.
+  Hidden staging directories are ignored. Every existing final destination must
+  have valid completion metadata; incomplete destinations fail for inspection.
+- Validate completed stages before skipping them: endpoint/batch identity,
+  declared file presence, counts, schemas, and recorded checksums. Check upstream
+  metadata hashes where recorded and available, plus Bronze's Raw source-file
+  hashes. Bronze v1 has no output checksums, so its validation uses its existing
+  schema, count, annotation, and provenance contract. Do not rewrite metadata or
+  upgrade transformation versions automatically.
+- Start from the earliest published layer for each batch and build missing
+  downstream stages, passing explicit paths. Standalone Bronze/Silver/Gold
+  batches can be recognized without earlier layers. A missing intermediate layer
+  between two existing publications is an inconsistent chain and fails before
+  building that batch. Existing outputs are never replaced.
+- No new export plus no unfinished work returns `noop` with no data or metadata
+  writes. No new export with pending downstream work resumes that work. A fresh
+  export creates its own immutable snapshot; existing snapshots remain separate.
+- Return `PipelineRunResult(status, new_raw_batch, batches)`. Successful status
+  is `completed` if ingestion or a transformation published output, otherwise
+  `noop`. Each `BatchRunResult` contains ingestion date, batch ID, published paths,
+  and completed/skipped stages. Newly ingested Raw counts as completed.
+- On the first error, stop dependent stages and later batches. Raise
+  `PipelineRunError(stage, batch_path, result)` from the original exception;
+  `result.status` is `None` on failure and its batches retain partial progress.
+  The CLI prints the context and original cause and exits nonzero. Successful
+  and no-op runs exit zero.
+- Retry by invoking the runner again. Existing stage publication contracts retain
+  completed outputs and clean ordinary failed staging. Forced termination can
+  leave hidden staging files, which discovery ignores. Damaged/incomplete final
+  outputs require inspection; the runner never deletes or repairs them.
+- Run one instance per data root. No scheduler, lock, automatic retry policy,
+  progress database, or persistent run-log files are introduced. Use standalone
+  commands for force-download or intentional reprocessing under another root.
 
 ### Raw Layer — Source Preservation
 
@@ -50,9 +95,8 @@ flowchart LR
   `None` when no new snapshot was published. Failure raises an error or exits
   nonzero from the CLI, leaving existing batches intact.
 - Perform no format conversion or cleaning and invoke no downstream tasks.
-  A future orchestrator passes the returned path to Bronze and retries failed
-  downstream processing using the already published Raw batch. Scheduling is
-  external to this node.
+  The pipeline runner passes completed Raw paths to Bronze and resumes failed
+  downstream processing using already published batches. Scheduling is external.
 
 ### Bronze Layer — Format Conversion
 

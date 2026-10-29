@@ -19,6 +19,7 @@ ingest = "openFDA_pipeline.ingestion.device_enforcement:main"
 bronze = "openFDA_pipeline.bronze.raw_to_bronze:main"
 silver = "openFDA_pipeline.silver.device_enforcement:main"
 gold = "openFDA_pipeline.gold.device_enforcement:main"
+openfda-pipeline = "openFDA_pipeline.pipeline:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
