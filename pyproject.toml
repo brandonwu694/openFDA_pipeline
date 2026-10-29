@@ -18,12 +18,14 @@ backfill = "openFDA_pipeline.backfill:main"
 ingest = "openFDA_pipeline.ingestion.device_enforcement:main"
 bronze = "openFDA_pipeline.bronze.raw_to_bronze:main"
 silver = "openFDA_pipeline.silver.device_enforcement:main"
+gold = "openFDA_pipeline.gold.device_enforcement:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 "openFDA_pipeline.silver" = ["sql/*.sql"]
+"openFDA_pipeline.gold" = ["sql/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

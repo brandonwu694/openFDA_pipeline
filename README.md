@@ -4,6 +4,41 @@
 
 The goal of this project is to develop a pipeline that ingests, processes, and makes openFDA medical device recall data ready for analysis and machine learning.
 
+## Gold analytics
+
+After Silver cleaning, install or reinstall the package to register `gold`:
+
+```sh
+python -m pip install .
+gold
+```
+
+`gold` builds analytics for the sole pending completed Silver batch. No pending
+batch is a successful no-op; multiple batches require explicit selection:
+
+```sh
+gold --silver-batch data/silver/device_enforcement/ingestion_date=YYYY-MM-DD/batch_id=YOUR_BATCH_ID
+```
+
+Use `--output-dir` to change the default `data/gold/` root. Outputs mirror the
+source ingestion date and batch ID and contain `recall_detail.parquet`,
+`recall_monthly.parquet`, `recall_by_firm.parquet`, `recall_by_status.parquet`,
+and `gold_metadata.json`. Existing output batches are never overwritten; choose
+another output root for intentional reprocessing. Ignore hidden `.gold-*` staging
+directories left by forced termination.
+
+For DAG use, `from openFDA_pipeline.gold import build_gold`, then call
+`build_gold(silver_batch_dir)` to obtain the published batch path. Gold uses only
+Silver accepted records, preserving narratives, warnings, and source provenance.
+It adds date dimensions, flagged date intervals, classification indicators, text
+features, and summary counts. Targets and training datasets remain deferred.
+
+Select **one snapshot per analysis**. Complete snapshots overlap, event counts
+are not additive, and monthly/firm Class I shares repeat across classification
+rows. Reported status is not a live recall lifecycle measure; firm addresses do
+not describe affected geography. See the [Gold contract](docs/PIPELINE.md#device-enforcement-gold-contract)
+for table grains, metric definitions, feature semantics, and usage limits.
+
 ## Ingestion
 
 With your Python environment activated, install the package from the repository
