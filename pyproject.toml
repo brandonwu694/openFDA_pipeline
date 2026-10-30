@@ -12,6 +12,7 @@ dependencies = ["requests>=2.31,<3", "pyarrow>=18", "duckdb>=2.0,<3"]
 [project.optional-dependencies]
 test = ["pytest>=8"]
 notebook = ["jupyterlab>=4", "pandas>=2.2", "matplotlib>=3.8"]
+dashboard = ["streamlit>=1.50,<2", "pandas>=2.2", "altair>=5,<7"]
 
 [project.scripts]
 backfill = "openFDA_pipeline.backfill:main"

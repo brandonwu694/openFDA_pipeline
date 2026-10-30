@@ -75,6 +75,52 @@ See the [pipeline architecture](docs/PIPELINE.md) and
 [Gold contract](docs/PIPELINE.md#device-enforcement-gold-contract) for layer
 responsibilities, validation rules, table grains, and metric definitions.
 
+## Explore Gold in a local dashboard
+
+Build Gold with the pipeline first, then install the optional dashboard dependencies
+and launch from the repository root:
+
+```sh
+python -m pip install -e ".[dashboard]"
+python -m streamlit run src/openFDA_pipeline/dashboard/app.py -- --gold-root data/gold
+```
+
+Open the local URL printed by Streamlit. The repository's `.streamlit/config.toml`
+binds the server to `127.0.0.1` and supplies a neutral, high-contrast light theme.
+`--gold-root` selects a different Gold root; it defaults to `data/gold`.
+This dashboard runs locally and reads existing files only. It does not run the
+pipeline, upload datasets, or rebuild invalid publications. If Gold is empty,
+it shows instructions to run the pipeline first.
+
+Choose a snapshot, then use report year or an inclusive report-date range,
+classification, recalling firm, and literal text search to explore it. Date mode
+chooses which controls appear; results change only when you select **Apply filters**.
+Empty classification/firm selections include every category. Snapshot changes and
+**Reset filters** restore all records. **Refresh snapshots** discovers new exports
+and reloads the selected snapshot without caching query results.
+
+Cards show recall count, distinct event count, Class I count, and Class I share.
+Charts show monthly trends and the top ten recalling firms, with expandable data
+tables as alternatives. The detail table uses 100-row pages; **Download filtered
+CSV** includes all matching records and all detail columns. Select **Prepare
+filtered CSV** first to generate the file on demand; navigation reuses it until
+the applied filters or snapshot change. Every view uses the
+same filters and one snapshot. Definitions and reporting limits appear alongside
+the metrics. Snapshot comparison and text-to-SQL are not included.
+
+If the selected snapshot disappears, the dashboard stops showing results and
+asks you to select and confirm a replacement rather than switching automatically.
+
+The UI is in `src/openFDA_pipeline/dashboard/app.py`; `dashboard/data.py` owns
+snapshot discovery, publication validation, and parameterized DuckDB queries.
+Existing Gold schemas and pipeline behavior are unchanged. Dashboard tests use
+synthetic snapshots and Streamlit AppTest:
+
+```sh
+python -m pip install -e ".[dashboard,test]"
+python -m pytest tests/dashboard -q
+```
+
 ## Use the runner from Python
 
 ```python

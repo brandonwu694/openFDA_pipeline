@@ -65,6 +65,48 @@ flowchart LR
   progress database, or persistent run-log files are introduced. Use standalone
   commands for force-download or intentional reprocessing under another root.
 
+### Local dashboard boundary
+
+The optional `dashboard/` package reads completed Gold snapshots through DuckDB;
+it never invokes ingestion or transformations, modifies publications, or publishes
+data remotely. `app.py` owns the Streamlit layout, filter form, and session state.
+`data.py` owns discovery, validation, fixed parameterized queries, and CSV retrieval.
+Streamlit/pandas are optional dashboard dependencies; pipeline installations do
+not require the UI. Launch instructions are in the README.
+
+Discover snapshots using explicit directory traversal so access errors are surfaced.
+Ignore staging directories and report incomplete or invalid publications for
+inspection. Default to the newest export, then ingestion date and batch ID. Validate
+the selected batch with the existing Gold publication validator before querying its
+manifest-defined detail file, with Hive partition inference disabled. No query cache
+or database files are created; temporary query tables live in memory.
+
+One applied filter set controls all metrics, charts, records, and CSV output:
+report-date interval (inclusive), classifications, normalized recalling firms,
+and literal case-insensitive search of recall number, firm, description, and reason.
+Year mode means January 1 through December 31. Empty category selections mean all;
+missing source categories remain selectable. Snapshot changes reset filters and
+pagination. If a selected snapshot disappears, report it and require explicit
+selection and confirmation of a replacement; do not silently change datasets.
+Date-mode changes configure the form but do not apply a filter until
+submission. Refresh re-discovers and reloads data; it never runs the pipeline.
+
+Compute dashboard aggregates directly from filtered `recall_detail`, including
+distinct non-null events and Class I share among classified I/II/III records. Do
+not sum precomputed event counts or repeated shares. Monthly counts include zero
+months within the selected interval (the snapshot's report-date extent in All
+dates mode). Firm rankings show at most ten normalized names. Records are ordered
+by report date descending then recall number and paginated at 100; CSV includes
+all filtered rows and columns. Prepare CSV only on explicit request, retaining
+the bytes in session memory for that snapshot/filter set. Invalidate prepared
+exports on changed filters, snapshot selection, or snapshot disappearance.
+Empty datasets and zero denominators are explicit.
+
+Use labeled native controls, a neutral theme, consistent date/number formats,
+visible focus, chart data alternatives, and nearby metric definitions. The local
+server binds to loopback. Hosting, snapshot comparison, model targets, and
+text-to-SQL are separate future tasks.
+
 ### Raw Layer — Source Preservation
 
 **Purpose:** Preserve original openFDA API responses exactly as received to ensure reproducibility, traceability, and recoverability.
